@@ -8,7 +8,7 @@
         :key="d.key"
         class="chip dim-chip"
         :class="{ active: dimension === d.key }"
-        @click="dimension = d.key"
+        @click="onPickDimension(d.key)"
       >
         {{ d.label }}
       </view>
@@ -20,26 +20,41 @@
         :key="item.key"
         class="chip"
         :class="{ active: activeType === item.key }"
-        @click="activeType = item.key"
+        @click="onPickType(item.key)"
       >
         {{ item.label }}
       </view>
     </view>
 
-    <view class="card chart-card section-gap">
-      <view class="chart-title">频次柱状图</view>
-      <EChartBox :option="barOption" :height="240" />
+    <view v-if="pageLoading" class="skeleton-block section-gap">
+      <view class="sk-line sk-line--lg"></view>
+      <view class="sk-line"></view>
+      <view class="sk-line sk-line--sm"></view>
     </view>
 
-    <view class="card chart-card section-gap">
-      <view class="chart-title">频率趋势图</view>
-      <EChartBox :option="trendOption" :height="240" />
-    </view>
+    <template v-else>
+      <view v-if="!hasChartData" class="empty-block card section-gap">
+        <text class="empty-title">暂无统计数据</text>
+        <text class="empty-desc">当前维度或类型下没有可汇总的事件，先去记录页新增一条吧。</text>
+      </view>
 
-    <view class="card chart-card section-gap">
-      <view class="chart-title">类型占比</view>
-      <EChartBox :option="pieOption" :height="220" />
-    </view>
+      <template v-else>
+        <view class="card chart-card section-gap" :key="'bar-' + chartKey">
+          <view class="chart-title">频次柱状图</view>
+          <EChartBox :option="barOption" :height="240" />
+        </view>
+
+        <view class="card chart-card section-gap" :key="'trend-' + chartKey">
+          <view class="chart-title">频率趋势图</view>
+          <EChartBox :option="trendOption" :height="240" />
+        </view>
+
+        <view v-if="pieSeries.length" class="card chart-card section-gap" :key="'pie-' + chartKey">
+          <view class="chart-title">类型占比</view>
+          <EChartBox :option="pieOption" :height="220" />
+        </view>
+      </template>
+    </template>
 
     <view class="stat-grid section-gap">
       <StatCard label="周均次数" :value="cards.weeklyAvg" />
@@ -55,7 +70,10 @@
 import StatCard from "@/components/StatCard.vue";
 import EChartBox from "@/components/EChartBox.vue";
 import { RECORD_TYPES } from "@/static/mock/records";
-import { BAR_SERIES_BY_DIMENSION, DIMENSIONS, PIE_SERIES, TREND_SERIES_BY_DIMENSION } from "@/static/mock/stats";
+import { DIMENSIONS } from "@/static/mock/stats";
+import { aggregateStats } from "@/utils/aggregateRecords";
+import { loadRecords } from "@/utils/recordStore";
+import { track } from "@/utils/track";
 
 export default {
   components: { StatCard, EChartBox },
@@ -64,18 +82,32 @@ export default {
       dimension: "week",
       activeType: "ALL",
       dimensions: DIMENSIONS,
-      typeOptions: RECORD_TYPES
+      typeOptions: RECORD_TYPES,
+      rawRecords: [],
+      pageLoading: true,
+      statsHydrated: false,
+      chartKey: 0
     };
   },
   computed: {
+    aggregated() {
+      return aggregateStats(this.rawRecords, this.dimension, this.activeType);
+    },
     barSeries() {
-      return BAR_SERIES_BY_DIMENSION[this.dimension] || [];
+      return this.aggregated.barSeries;
     },
     trendSeries() {
-      return TREND_SERIES_BY_DIMENSION[this.dimension] || [];
+      return this.aggregated.trendSeries;
     },
     pieSeries() {
-      return PIE_SERIES;
+      return this.aggregated.pieSeries;
+    },
+    filteredCount() {
+      if (this.activeType === "ALL") return this.rawRecords.length;
+      return this.rawRecords.filter((r) => r.type === this.activeType).length;
+    },
+    hasChartData() {
+      return this.filteredCount > 0;
     },
     barOption() {
       return {
@@ -149,6 +181,11 @@ export default {
       };
     },
     pieOption() {
+      const data = this.pieSeries.map((p) => ({
+        value: p.percent,
+        name: p.label,
+        itemStyle: { color: p.color }
+      }));
       return {
         tooltip: { trigger: "item" },
         legend: {
@@ -163,29 +200,53 @@ export default {
             center: ["50%", "45%"],
             itemStyle: { borderColor: "#fff", borderWidth: 2 },
             label: { formatter: "{b} {d}%" },
-            data: [
-              { value: this.pieSeries[0]?.percent || 0, name: this.pieSeries[0]?.label || "生理现象", itemStyle: { color: "#4f46e5" } },
-              { value: this.pieSeries[1]?.percent || 0, name: this.pieSeries[1]?.label || "亲密互动", itemStyle: { color: "#0ea5a4" } },
-              { value: this.pieSeries[2]?.percent || 0, name: this.pieSeries[2]?.label || "自我舒缓", itemStyle: { color: "#8b5cf6" } }
-            ]
+            data
           }
         ]
       };
     },
     cards() {
-      if (this.dimension === "week") {
-        return { weeklyAvg: "5", monthlyAvg: "-", maxIntervalDays: "9天", minIntervalDays: "2天", peakTimeBucket: "18:00-23:59" };
+      if (!this.hasChartData) {
+        return {
+          weeklyAvg: "-",
+          monthlyAvg: "-",
+          maxIntervalDays: "-",
+          minIntervalDays: "-",
+          peakTimeBucket: "-"
+        };
       }
-      if (this.dimension === "month") {
-        return { weeklyAvg: "1.8", monthlyAvg: "8", maxIntervalDays: "9天", minIntervalDays: "2天", peakTimeBucket: "18:00-23:59" };
-      }
-      if (this.dimension === "year") {
-        return { weeklyAvg: "1.2", monthlyAvg: "5.3", maxIntervalDays: "14天", minIntervalDays: "1天", peakTimeBucket: "00:00-05:59" };
-      }
-      return { weeklyAvg: "1.1", monthlyAvg: "4.9", maxIntervalDays: "20天", minIntervalDays: "1天", peakTimeBucket: "18:00-23:59" };
+      return this.aggregated.cards;
     }
   },
-  methods: {}
+  onShow() {
+    this.refreshData();
+  },
+  methods: {
+    refreshData() {
+      this.rawRecords = loadRecords();
+      this.chartKey += 1;
+      if (!this.statsHydrated) {
+        this.pageLoading = true;
+        this.$nextTick(() => {
+          setTimeout(() => {
+            this.pageLoading = false;
+            this.statsHydrated = true;
+          }, 220);
+        });
+      }
+      track("stats_view", { dimension: this.dimension, type: this.activeType });
+    },
+    onPickDimension(key) {
+      this.dimension = key;
+      this.chartKey += 1;
+      track("stats_dimension", { dimension: key });
+    },
+    onPickType(key) {
+      this.activeType = key;
+      this.chartKey += 1;
+      track("stats_type_filter", { type: key });
+    }
+  }
 };
 </script>
 
@@ -220,5 +281,60 @@ export default {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.empty-block {
+  padding: 28px 20px;
+  text-align: center;
+}
+
+.empty-title {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  color: $text-primary;
+  margin-bottom: 8px;
+}
+
+.empty-desc {
+  display: block;
+  font-size: 13px;
+  color: $text-secondary;
+  line-height: 1.5;
+}
+
+.skeleton-block {
+  padding: 20px 16px;
+  background: $bg-card;
+  border-radius: 12px;
+  border: 1px solid $border;
+}
+
+.sk-line {
+  height: 14px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #eef2ff 0%, #e5e7eb 50%, #eef2ff 100%);
+  background-size: 200% 100%;
+  animation: sk 1.1s ease-in-out infinite;
+  margin-bottom: 12px;
+}
+
+.sk-line--lg {
+  height: 160px;
+}
+
+.sk-line--sm {
+  height: 10px;
+  width: 55%;
+  margin-bottom: 0;
+}
+
+@keyframes sk {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
 }
 </style>

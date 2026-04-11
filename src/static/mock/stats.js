@@ -5,6 +5,96 @@ export const DIMENSIONS = [
   { key: "total", label: "总" }
 ];
 
+/** 与「全部」占比 mock 对齐，用于单类型筛选时缩放柱状/趋势数据 */
+export const TYPE_STATS_WEIGHT = {
+  ALL: 1,
+  EMISSION: 0.37,
+  SEX: 0.4,
+  MASTURBATION: 0.23
+};
+
+const TYPE_PIE_STYLE = {
+  EMISSION: { label: "生理现象", color: "#4f46e5" },
+  SEX: { label: "亲密互动", color: "#0ea5a4" },
+  MASTURBATION: { label: "自我舒缓", color: "#8b5cf6" }
+};
+
+export function scaleSeriesForType(series, typeKey) {
+  const base = series || [];
+  if (typeKey === "ALL") return base.map((x) => ({ ...x }));
+  const w = TYPE_STATS_WEIGHT[typeKey] ?? 1;
+  return base.map((x) => ({
+    ...x,
+    count: Math.max(0, Math.round(x.count * w))
+  }));
+}
+
+export function pieSeriesForType(typeKey) {
+  if (typeKey === "ALL") {
+    return PIE_SERIES.map((x, i) => ({
+      ...x,
+      color: ["#4f46e5", "#0ea5a4", "#8b5cf6"][i]
+    }));
+  }
+  const style = TYPE_PIE_STYLE[typeKey];
+  if (!style) return PIE_SERIES;
+  return [{ label: style.label, percent: 100, color: style.color }];
+}
+
+/** 指标卡：按维度基准 + 类型权重生成展示文案 */
+export const CARDS_BY_DIMENSION = {
+  week: {
+    weeklyAvg: 5,
+    monthlyAvg: null,
+    maxIntervalDays: 9,
+    minIntervalDays: 2,
+    peakTimeBucket: "18:00-23:59"
+  },
+  month: {
+    weeklyAvg: 1.8,
+    monthlyAvg: 8,
+    maxIntervalDays: 9,
+    minIntervalDays: 2,
+    peakTimeBucket: "18:00-23:59"
+  },
+  year: {
+    weeklyAvg: 1.2,
+    monthlyAvg: 5.3,
+    maxIntervalDays: 14,
+    minIntervalDays: 1,
+    peakTimeBucket: "00:00-05:59"
+  },
+  total: {
+    weeklyAvg: 1.1,
+    monthlyAvg: 4.9,
+    maxIntervalDays: 20,
+    minIntervalDays: 1,
+    peakTimeBucket: "18:00-23:59"
+  }
+};
+
+export function statCardsFor(dimension, typeKey) {
+  const base = CARDS_BY_DIMENSION[dimension] || CARDS_BY_DIMENSION.week;
+  const w = typeKey === "ALL" ? 1 : TYPE_STATS_WEIGHT[typeKey] ?? 1;
+  const stretch = 2 - w;
+  const fmtAvg = (v) => {
+    if (v == null || v === undefined) return "-";
+    const n = Math.max(0, Math.round(v * w * 10) / 10);
+    return n === 0 ? "0" : String(n);
+  };
+  return {
+    weeklyAvg: fmtAvg(base.weeklyAvg),
+    monthlyAvg: base.monthlyAvg == null ? "-" : fmtAvg(base.monthlyAvg),
+    maxIntervalDays: `${Math.max(1, Math.round(base.maxIntervalDays * stretch))}天`,
+    minIntervalDays: `${Math.max(1, Math.round(base.minIntervalDays * stretch))}天`,
+    peakTimeBucket: base.peakTimeBucket
+  };
+}
+
+export function seriesTotalCount(series) {
+  return (series || []).reduce((s, x) => s + (Number(x.count) || 0), 0);
+}
+
 export const BAR_SERIES_BY_DIMENSION = {
   week: [
     { label: "04.06", count: 1 },

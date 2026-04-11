@@ -17,35 +17,64 @@
       </view>
     </view>
 
-    <view v-for="item in filteredRecords" :key="item.id" class="record-card card" @click="handleEdit(item)">
-      <view class="record-indicator" :class="indicatorClass(item.type)"></view>
-      <view class="record-content">
-        <view class="record-top">
-          <text class="type-tag" :class="typeTagClass(item.type)">{{ item.typeLabel }}</text>
-          <text class="muted time-text">{{ item.datetime }}</text>
-        </view>
-        <view class="record-note">{{ item.note || "无备注" }}</view>
-      </view>
-      <text class="record-arrow">›</text>
+    <view v-if="filteredRecords.length === 0" class="empty-block card">
+      <text class="empty-title">暂无记录</text>
+      <text class="empty-desc">
+        {{ activeType === "ALL" ? "登录后新增一条，或调整筛选类型。" : "该类型下还没有记录，试试「全部」或其他类型。" }}
+      </text>
+      <view v-if="isLoggedIn" class="empty-action primary-button" @click="handleCreate">去新增</view>
     </view>
+
+    <template v-else>
+      <view
+        v-for="item in filteredRecords"
+        :key="item.id"
+        class="record-card card"
+        @click="handleEdit(item)"
+      >
+        <view class="record-indicator" :class="indicatorClass(item.type)"></view>
+        <view class="record-content">
+          <view class="record-top">
+            <text class="type-tag" :class="typeTagClass(item.type)">{{ item.typeLabel }}</text>
+            <text class="muted time-text">{{ item.datetime }}</text>
+          </view>
+          <view class="record-note">{{ item.note || "无备注" }}</view>
+        </view>
+        <text class="record-arrow">›</text>
+      </view>
+
+      <view class="list-footer">
+        <text class="footer-line">已显示 {{ filteredRecords.length }} 条</text>
+        <text class="footer-line footer-muted">分页与上拉加载将在接入接口后启用</text>
+      </view>
+    </template>
+
+    <LoginGatePopup
+      :visible="loginPopupVisible"
+      @close="closeLoginPopup"
+      @login="confirmLoginPopup"
+    />
   </view>
 </template>
 
 <script>
-import { RECORD_TYPES, MOCK_RECORDS } from "@/static/mock/records";
-import { isLoggedIn } from "@/utils/auth";
+import LoginGatePopup from "@/components/LoginGatePopup.vue";
+import { RECORD_TYPES } from "@/static/mock/records";
+import { loadRecords } from "@/utils/recordStore";
+import { isLoggedIn, setLoggedIn } from "@/utils/auth";
+import { track } from "@/utils/track";
 
 export default {
+  components: { LoginGatePopup },
   data() {
     return {
       isLoggedIn: false,
       activeType: "ALL",
       typeOptions: RECORD_TYPES,
-      records: MOCK_RECORDS
+      records: [],
+      loginPopupVisible: false,
+      pendingLogin: null
     };
-  },
-  onShow() {
-    this.isLoggedIn = isLoggedIn();
   },
   computed: {
     filteredRecords() {
@@ -53,7 +82,14 @@ export default {
       return this.records.filter((item) => item.type === this.activeType);
     }
   },
+  onShow() {
+    this.isLoggedIn = isLoggedIn();
+    this.records = loadRecords();
+  },
   methods: {
+    refreshList() {
+      this.records = loadRecords();
+    },
     indicatorClass(type) {
       if (type === "SEX") return "indicator-sex";
       if (type === "MASTURBATION") return "indicator-relief";
@@ -64,19 +100,55 @@ export default {
       if (type === "MASTURBATION") return "type-tag-relief";
       return "type-tag-physio";
     },
+    closeLoginPopup() {
+      this.loginPopupVisible = false;
+      this.pendingLogin = null;
+    },
+    confirmLoginPopup() {
+      setLoggedIn(true);
+      this.isLoggedIn = true;
+      this.loginPopupVisible = false;
+      const p = this.pendingLogin;
+      this.pendingLogin = null;
+      track("login_success", { via: "popup" });
+      if (p === "create") this.openFormCreate();
+      else if (p && p.kind === "edit") this.openFormEdit(p.item);
+    },
     handleCreate() {
       if (!this.isLoggedIn) {
-        uni.navigateTo({ url: "/pages/auth/login" });
+        this.pendingLogin = "create";
+        this.loginPopupVisible = true;
         return;
       }
-      uni.navigateTo({ url: "/pages/records/form?mode=create" });
+      this.openFormCreate();
     },
     handleEdit(item) {
       if (!this.isLoggedIn) {
-        uni.navigateTo({ url: "/pages/auth/login" });
+        this.pendingLogin = { kind: "edit", item };
+        this.loginPopupVisible = true;
         return;
       }
-      uni.navigateTo({ url: `/pages/records/form?mode=edit&id=${item.id}` });
+      this.openFormEdit(item);
+    },
+    openFormCreate() {
+      uni.navigateTo({
+        url: "/pages/records/form?mode=create",
+        success: (res) => {
+          res.eventChannel.on("recordsChanged", () => {
+            this.refreshList();
+          });
+        }
+      });
+    },
+    openFormEdit(item) {
+      uni.navigateTo({
+        url: `/pages/records/form?mode=edit&id=${item.id}`,
+        success: (res) => {
+          res.eventChannel.on("recordsChanged", () => {
+            this.refreshList();
+          });
+        }
+      });
     }
   }
 };
@@ -195,5 +267,49 @@ export default {
   color: #9ca3af;
   font-size: 22px;
   line-height: 1;
+}
+
+.empty-block {
+  padding: 32px 20px 28px;
+  text-align: center;
+  margin-top: 8px;
+}
+
+.empty-title {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  color: $text-primary;
+  margin-bottom: 8px;
+}
+
+.empty-desc {
+  display: block;
+  font-size: 13px;
+  color: $text-secondary;
+  line-height: 1.55;
+  margin-bottom: 16px;
+}
+
+.empty-action {
+  display: inline-block;
+  min-width: 120px;
+  margin: 0 auto;
+}
+
+.list-footer {
+  padding: 16px 8px 24px;
+  text-align: center;
+}
+
+.footer-line {
+  display: block;
+  font-size: 12px;
+  color: $text-secondary;
+  line-height: 1.6;
+}
+
+.footer-muted {
+  color: $text-placeholder;
 }
 </style>

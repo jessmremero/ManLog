@@ -30,6 +30,7 @@
 
 <script>
 import { setLoggedIn } from "@/utils/auth";
+import { track } from "@/utils/track";
 
 export default {
   data() {
@@ -42,6 +43,7 @@ export default {
     doLogin() {
       if (!this.agreed) return;
       setLoggedIn(true);
+      track("login_success", { via: "page" });
       this.success = true;
       setTimeout(() => {
         uni.navigateBack();
