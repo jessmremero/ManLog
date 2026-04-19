@@ -11,13 +11,17 @@
         :key="item.key"
         class="chip"
         :class="{ active: activeType === item.key }"
-        @click="activeType = item.key"
+        @click="pickType(item.key)"
       >
         {{ item.label }}
       </view>
     </view>
 
-    <view v-if="filteredRecords.length === 0" class="empty-block card">
+    <view v-if="showRecordsLoading" class="empty-block card">
+      <text class="empty-title">加载中…</text>
+    </view>
+
+    <view v-else-if="filteredRecords.length === 0" class="empty-block card">
       <text class="empty-title">暂无记录</text>
       <text class="empty-desc">
         {{ activeType === "ALL" ? "登录后新增一条，或调整筛选类型。" : "该类型下还没有记录，试试「全部」或其他类型。" }}
@@ -40,12 +44,17 @@
           </view>
           <view class="record-note">{{ item.note || "无备注" }}</view>
         </view>
+        <view class="record-del-wrap" @click.stop="confirmDeleteRecord(item)">
+          <image class="record-del-icon" src="/static/icons/trash.svg" mode="aspectFit" />
+        </view>
         <text class="record-arrow">›</text>
       </view>
 
       <view class="list-footer">
-        <text class="footer-line">已显示 {{ filteredRecords.length }} 条</text>
-        <text class="footer-line footer-muted">分页与上拉加载将在接入接口后启用</text>
+        <text class="footer-line">已显示 {{ filteredRecords.length }} / 共 {{ listFooterTotal }} 条</text>
+        <text v-if="listLoadMoreing" class="footer-line footer-muted">正在加载更多…</text>
+        <text v-else-if="listNoMore && filteredRecords.length > 0" class="footer-line footer-muted">已加载全部</text>
+        <text v-else-if="!listNoMore && filteredRecords.length > 0" class="footer-line footer-muted">上拉加载更多</text>
       </view>
     </template>
 
@@ -59,10 +68,23 @@
 
 <script>
 import LoginGatePopup from "@/components/LoginGatePopup.vue";
+import { useApi } from "@/config/api.js";
+import { performWxLogin } from "@/services/authApi.js";
+import { deleteRecordApi, fetchRecordList } from "@/services/recordsApi.js";
 import { RECORD_TYPES } from "@/static/mock/records";
-import { loadRecords } from "@/utils/recordStore";
+import { deleteRecord, loadRecords } from "@/utils/recordStore";
 import { isLoggedIn, setLoggedIn } from "@/utils/auth";
 import { track } from "@/utils/track";
+
+const PAGE_SIZE = 20;
+
+function sortRecordsByDatetimeDesc(list) {
+  return [...list].sort((a, b) => {
+    const da = String(a.datetime || "").replace(/\//g, "-");
+    const db = String(b.datetime || "").replace(/\//g, "-");
+    return db.localeCompare(da);
+  });
+}
 
 export default {
   components: { LoginGatePopup },
@@ -72,23 +94,139 @@ export default {
       activeType: "ALL",
       typeOptions: RECORD_TYPES,
       records: [],
+      mockAllRecords: [],
+      listTotal: 0,
+      listPage: 1,
+      pageSize: PAGE_SIZE,
+      listLoading: false,
+      listLoadMoreing: false,
+      listNoMore: false,
       loginPopupVisible: false,
       pendingLogin: null
     };
   },
   computed: {
+    useApiMode() {
+      return useApi();
+    },
+    mockFilteredAll() {
+      if (useApi()) return [];
+      if (this.activeType === "ALL") return this.mockAllRecords;
+      return this.mockAllRecords.filter((item) => item.type === this.activeType);
+    },
     filteredRecords() {
-      if (this.activeType === "ALL") return this.records;
-      return this.records.filter((item) => item.type === this.activeType);
+      if (useApi()) return this.records;
+      return this.mockFilteredAll.slice(0, this.listPage * this.pageSize);
+    },
+    listFooterTotal() {
+      if (useApi()) return this.listTotal;
+      return this.mockFilteredAll.length;
+    },
+    showRecordsLoading() {
+      return useApi() && this.isLoggedIn && this.listLoading && this.records.length === 0;
     }
   },
   onShow() {
-    this.isLoggedIn = isLoggedIn();
-    this.records = loadRecords();
+    this.refreshList();
+  },
+  onReachBottom() {
+    this.tryLoadMore();
   },
   methods: {
-    refreshList() {
-      this.records = loadRecords();
+    pickType(key) {
+      if (this.activeType === key) return;
+      this.activeType = key;
+      this.listPage = 1;
+      this.listNoMore = false;
+      if (useApi()) {
+        if (!this.isLoggedIn) {
+          this.records = [];
+          this.listTotal = 0;
+          this.listNoMore = true;
+          return;
+        }
+        this.fetchApiRecords({ page: 1, replace: true });
+        return;
+      }
+      this.syncMockNoMore();
+    },
+    syncMockNoMore() {
+      const len = this.mockFilteredAll.length;
+      this.listNoMore = len === 0 || this.listPage * this.pageSize >= len;
+    },
+    tryLoadMore() {
+      if (this.listNoMore || this.listLoadMoreing || this.listLoading) return;
+      if (useApi()) {
+        if (!this.isLoggedIn) return;
+        if (this.records.length >= this.listTotal && this.listTotal > 0) {
+          this.listNoMore = true;
+          return;
+        }
+        if (this.listTotal === 0) return;
+        this.fetchApiRecords({ page: this.listPage + 1, replace: false });
+        return;
+      }
+      this.loadMoreMock();
+    },
+    loadMoreMock() {
+      const fullLen = this.mockFilteredAll.length;
+      if (this.listPage * this.pageSize >= fullLen) {
+        this.listNoMore = true;
+        return;
+      }
+      this.listPage += 1;
+      this.listNoMore = this.listPage * this.pageSize >= fullLen;
+    },
+    async fetchApiRecords({ page, replace }) {
+      if (page === 1) {
+        this.listLoading = true;
+      } else {
+        this.listLoadMoreing = true;
+      }
+      try {
+        const res = await fetchRecordList({
+          page,
+          pageSize: this.pageSize,
+          eventType: this.activeType === "ALL" ? undefined : this.activeType
+        });
+        if (replace || page === 1) {
+          this.records = res.list;
+        } else {
+          this.records = [...this.records, ...res.list];
+        }
+        this.listPage = page;
+        this.listTotal = res.total;
+        this.listNoMore = this.records.length >= this.listTotal;
+      } catch (e) {
+        if (page === 1) {
+          this.records = [];
+          this.listTotal = 0;
+        }
+        uni.showToast({ title: e.message || "加载失败", icon: "none" });
+      } finally {
+        this.listLoading = false;
+        this.listLoadMoreing = false;
+      }
+    },
+    async refreshList() {
+      this.isLoggedIn = isLoggedIn();
+      this.listPage = 1;
+      this.listNoMore = false;
+      if (useApi()) {
+        this.mockAllRecords = [];
+        if (!this.isLoggedIn) {
+          this.records = [];
+          this.listTotal = 0;
+          this.listLoading = false;
+          this.listNoMore = true;
+          return;
+        }
+        await this.fetchApiRecords({ page: 1, replace: true });
+        return;
+      }
+      this.records = [];
+      this.mockAllRecords = sortRecordsByDatetimeDesc(loadRecords());
+      this.syncMockNoMore();
     },
     indicatorClass(type) {
       if (type === "SEX") return "indicator-sex";
@@ -104,7 +242,29 @@ export default {
       this.loginPopupVisible = false;
       this.pendingLogin = null;
     },
-    confirmLoginPopup() {
+    async confirmLoginPopup() {
+      if (useApi()) {
+        uni.showLoading({ title: "登录中", mask: true });
+        try {
+          await performWxLogin();
+          this.isLoggedIn = true;
+          this.loginPopupVisible = false;
+          const p = this.pendingLogin;
+          this.pendingLogin = null;
+          track("login_success", { via: "popup" });
+          await this.refreshList();
+          if (p === "create") this.openFormCreate();
+          else if (p && p.kind === "edit") this.openFormEdit(p.item);
+          else if (p && p.kind === "delete") {
+            setTimeout(() => this.confirmDeleteRecord(p.item), 250);
+          }
+        } catch (e) {
+          uni.showToast({ title: e.message || "登录失败", icon: "none" });
+        } finally {
+          uni.hideLoading();
+        }
+        return;
+      }
       setLoggedIn(true);
       this.isLoggedIn = true;
       this.loginPopupVisible = false;
@@ -113,6 +273,9 @@ export default {
       track("login_success", { via: "popup" });
       if (p === "create") this.openFormCreate();
       else if (p && p.kind === "edit") this.openFormEdit(p.item);
+      else if (p && p.kind === "delete") {
+        setTimeout(() => this.confirmDeleteRecord(p.item), 250);
+      }
     },
     handleCreate() {
       if (!this.isLoggedIn) {
@@ -129,6 +292,48 @@ export default {
         return;
       }
       this.openFormEdit(item);
+    },
+    confirmDeleteRecord(item) {
+      if (!this.isLoggedIn) {
+        this.pendingLogin = { kind: "delete", item };
+        this.loginPopupVisible = true;
+        return;
+      }
+      uni.showModal({
+        title: "删除确认",
+        content: "确定删除这条记录？删除后无法恢复。",
+        confirmText: "确认",
+        cancelText: "取消",
+        success: (res) => {
+          if (!res.confirm) return;
+          this.doDeleteRecord(item);
+        }
+      });
+    },
+    async doDeleteRecord(item) {
+      const id = Number(item.id);
+      if (!Number.isFinite(id)) {
+        uni.showToast({ title: "无效记录", icon: "none" });
+        return;
+      }
+      if (useApi()) {
+        uni.showLoading({ title: "删除中", mask: true });
+        try {
+          await deleteRecordApi(id);
+          track("record_delete", { id, from: "list" });
+          uni.showToast({ title: "已删除", icon: "success" });
+          await this.refreshList();
+        } catch (e) {
+          uni.showToast({ title: e.message || "删除失败", icon: "none" });
+        } finally {
+          uni.hideLoading();
+        }
+        return;
+      }
+      deleteRecord(loadRecords(), id);
+      track("record_delete", { id, from: "list" });
+      uni.showToast({ title: "已删除", icon: "success" });
+      await this.refreshList();
     },
     openFormCreate() {
       uni.navigateTo({
@@ -261,6 +466,19 @@ export default {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.record-del-wrap {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.record-del-icon {
+  width: 22px;
+  height: 22px;
 }
 
 .record-arrow {

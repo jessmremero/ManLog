@@ -51,7 +51,7 @@
 </template>
 
 <script>
-import { isLoggedIn, setLoggedIn } from "@/utils/auth";
+import { clearAuth, isLoggedIn } from "@/utils/auth";
 
 export default {
   data() {
@@ -65,7 +65,7 @@ export default {
   methods: {
     toggleLogin() {
       if (this.isLoggedIn) {
-        setLoggedIn(false);
+        clearAuth();
         this.isLoggedIn = false;
         uni.showToast({ title: "已退出登录", icon: "none" });
         return;

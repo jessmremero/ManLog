@@ -47,11 +47,12 @@
 |---|---|---|---|
 | `id` | bigint | PK | 记录主键 |
 | `user_id` | bigint | NOT NULL | 归属用户 |
-| `event_type` | varbinary(256) | NOT NULL | 事件类型（加密存储） |
+| `event_type_enc` | varbinary(768) | NOT NULL | 事件类型密文（AES-256-GCM） |
+| `event_type_lookup` | binary(32) | NOT NULL | 类型筛选用 HMAC（见 §5.2） |
 | `event_date` | date | NOT NULL | 事件日期 |
 | `event_time` | time | NULL | 事件时间（可空） |
 | `event_datetime_utc` | datetime | NOT NULL | 事件 UTC 时间（排序/统计） |
-| `note` | varbinary(2048) | NULL | 备注（加密存储，<=200 字） |
+| `note_enc` | varbinary(4096) | NULL | 备注密文（<=200 字明文；可空） |
 | `is_deleted` | tinyint | NOT NULL, default 0 | 软删标记 |
 | `created_at` | datetime | NOT NULL | 创建时间 |
 | `updated_at` | datetime | NOT NULL | 更新时间 |
@@ -60,9 +61,10 @@
 - `idx_record_user_time (user_id, event_datetime_utc desc)`
 - `idx_record_user_date (user_id, event_date)`
 - `idx_record_user_deleted (user_id, is_deleted)`
+- `idx_record_user_type_lookup (user_id, event_type_lookup)`
 
 说明：
-- `event_type` 建议采用枚举值加密后存储，读取时解密映射。
+- 读取列表/详情时服务端解密 `event_type_enc` / `note_enc`，接口层仍为明文 `eventType` / `note`（传输 HTTPS）。
 - 删除采用软删，便于审计和恢复。
 - 展示术语映射（前端统一文案）：
   - `EMISSION` -> 生理现象
@@ -290,8 +292,13 @@
 
 ## 5.2 加密方案
 - 传输：全链路 HTTPS。
-- 存储：`event_type`、`note` 字段应用层加密。
-- 密钥：托管于云 KMS，服务端运行时拉取。
+- 存储（已实现，见 `server/src/lib/recordCrypto.js`）：
+  - `event_type_enc` / `note_enc`：**AES-256-GCM**，每字段独立随机 IV，认证标签与密文一并存储（`VARBINARY`）。
+  - 用户数据密钥：`HKDF-SHA256(MANLOG_RECORD_MASTER_KEY, salt=userId, info=manlog-record-v1)`。
+  - `event_type_lookup`：**HMAC-SHA256(userKey, "type|" + eventType)**，用于 SQL 等值筛选；不存明文枚举，但同一用户下同事件类型的记录可被关联（隐私与性能折中）。
+  - 空备注：`note_enc` 为 `NULL`，不解密。
+- 密钥：生产环境由环境变量 `MANLOG_RECORD_MASTER_KEY`（64 hex 或 32-byte Base64）注入；**推荐**托管于云 KMS/密钥服务，由启动脚本或 sidecar 写入环境变量，应用内不落盘明文主密钥。
+- 密钥轮换：需新主密钥解密（或双读旧密钥）后批量重加密；v1 预留运维窗口执行，可在后续版本提供 `rotate-record-master-key` 脚本。
 
 ## 5.3 审计与风控
 - 记录新增、编辑、删除、登录写入 `audit_logs`。

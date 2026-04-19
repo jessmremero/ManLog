@@ -29,6 +29,8 @@
 </template>
 
 <script>
+import { useApi } from "@/config/api.js";
+import { performWxLogin } from "@/services/authApi.js";
 import { setLoggedIn } from "@/utils/auth";
 import { track } from "@/utils/track";
 
@@ -40,14 +42,38 @@ export default {
     };
   },
   methods: {
-    doLogin() {
+    async doLogin() {
       if (!this.agreed) return;
+      if (useApi()) {
+        uni.showLoading({ title: "登录中", mask: true });
+        try {
+          await performWxLogin();
+          track("login_success", { via: "page" });
+          this.success = true;
+          setTimeout(() => {
+            this.finishLoginNavigate();
+          }, 650);
+        } catch (e) {
+          uni.showToast({ title: e.message || "登录失败", icon: "none" });
+        } finally {
+          uni.hideLoading();
+        }
+        return;
+      }
       setLoggedIn(true);
       track("login_success", { via: "page" });
       this.success = true;
       setTimeout(() => {
-        uni.navigateBack();
+        this.finishLoginNavigate();
       }, 650);
+    },
+    finishLoginNavigate() {
+      const stack = typeof getCurrentPages === "function" ? getCurrentPages() : [];
+      if (stack.length > 1) {
+        uni.navigateBack();
+        return;
+      }
+      uni.switchTab({ url: "/pages/records/index" });
     },
     goBack() {
       uni.navigateBack();
