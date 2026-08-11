@@ -30,11 +30,11 @@
     </view>
 
     <view class="card menu-card">
-      <view class="menu-item">
+      <view class="menu-item" @click="openLegal('privacy')">
         <text>隐私政策</text>
         <text class="menu-arrow">›</text>
       </view>
-      <view class="menu-item">
+      <view class="menu-item" @click="openLegal('terms')">
         <text>用户协议</text>
         <text class="menu-arrow">›</text>
       </view>
@@ -63,6 +63,9 @@ export default {
     this.isLoggedIn = isLoggedIn();
   },
   methods: {
+    openLegal(type) {
+      uni.navigateTo({ url: `/pages/legal/${type}` });
+    },
     toggleLogin() {
       if (this.isLoggedIn) {
         clearAuth();

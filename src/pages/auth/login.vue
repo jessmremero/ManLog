@@ -14,7 +14,11 @@
 
       <view class="agree-row">
         <checkbox :checked="agreed" @click="agreed = !agreed" />
-        <text class="agree-text">我已阅读并同意《用户协议》《隐私政策》</text>
+        <view class="agree-text">
+          我已阅读并同意
+          <text class="legal-link" @click.stop="openLegal('terms')">《用户协议》</text>
+          <text class="legal-link" @click.stop="openLegal('privacy')">《隐私政策》</text>
+        </view>
       </view>
 
       <view class="primary-button" :class="{ disabled: !agreed }" @click="doLogin">微信一键登录</view>
@@ -42,6 +46,9 @@ export default {
     };
   },
   methods: {
+    openLegal(type) {
+      uni.navigateTo({ url: `/pages/legal/${type}` });
+    },
     async doLogin() {
       if (!this.agreed) return;
       if (useApi()) {
@@ -133,6 +140,12 @@ export default {
 .agree-text {
   font-size: 12px;
   color: $text-secondary;
+  line-height: 20px;
+}
+
+.legal-link {
+  color: $primary;
+  font-weight: 600;
 }
 
 .primary-button.disabled {
